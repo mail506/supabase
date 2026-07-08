@@ -317,11 +317,10 @@ with tab_cert:
 
     st.markdown("#### 設定値からの乖離分布")
 
-    st.markdown("""
-| 乖離幅 | 時間 | 割合 |
-|--------|------|------|""")
+    band_table = "| 乖離幅 | 時間 | 割合 |\n|--------|------|------|\n"
     for b in bands_all:
-        st.markdown(f"| {b['label']} | {b['hours']} 時間 | {b['pct']}% |")
+        band_table += f"| {b['label']} | {b['hours']} 時間 | {b['pct']}% |\n"
+    st.markdown(band_table)
 
     st.markdown(f"""
 #### 温湿度記録
