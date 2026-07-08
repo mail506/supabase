@@ -57,7 +57,6 @@ def load_data():
     return sensors, ops
 
 sensors, ops = load_data()
-latest = sensors.iloc[-1]
 
 # ─────────────────────────────
 # ヘッダー
@@ -65,18 +64,24 @@ latest = sensors.iloc[-1]
 col_h1, col_h2, col_h3 = st.columns([4, 3, 1])
 with col_h1:
     st.markdown("## VISTAVAULT 保管証明")
-    st.caption(f"PROTOSCAPE  /  {latest['device_id']}")
+    st.caption("PROTOSCAPE")
 with col_h2:
-    st.markdown(
-        f'<div style="padding-top:10px;font-size:12px;color:#aaa;line-height:2">'
-        f'最終同期：{latest["recorded_at"].strftime("%Y-%m-%d %H:%M")}&emsp;'
-        f'WiFi：{latest["rssi"]} dBm</div>',
-        unsafe_allow_html=True,
-    )
+    if not sensors.empty:
+        latest = sensors.iloc[-1]
+        st.markdown(
+            f'<div style="padding-top:10px;font-size:12px;color:#aaa;line-height:2">'
+            f'最終同期：{latest["recorded_at"].strftime("%Y-%m-%d %H:%M")}&emsp;'
+            f'WiFi：{latest["rssi"]} dBm</div>',
+            unsafe_allow_html=True,
+        )
 with col_h3:
     if st.button("更新"):
         st.cache_data.clear()
         st.rerun()
+
+if sensors.empty:
+    st.info("センサーログがまだありません。Supabaseの sensor_logs テーブルにデータを追加してください。")
+    st.stop()
 
 st.divider()
 
