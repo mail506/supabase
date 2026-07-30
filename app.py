@@ -1,355 +1,491 @@
 """
-VISTAVAULT 保管証明ダッシュボード
-Phase 1: モックデータで表示確認
-Phase 2: Supabase 接続（data/mock_data.py のコメントを参照）
+VISTAVAULT Monitoring Dashboard — 1c Aurum
+Design: Claude Design (Aurum concept)
 """
 
-import streamlit as st
+import time
+from datetime import datetime, timedelta
+
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime
+import pytz
+import streamlit as st
+from supabase import create_client
 
-from data.mock_data import (
-    get_sensor_logs, get_operation_logs,
-    calc_band_stats, calc_deviation_events, DEVIATION_BANDS,
-)
-
-# ─────────────────────────────
-# ページ設定
-# ─────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="VISTAVAULT 保管証明",
-    page_icon="",
+    page_title="VISTAVAULT MONITORING",
+    page_icon="⬡",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
-<style>
-    [data-testid="stAppViewContainer"] { background: #fafafa; }
-    .block-container { padding-top: 2rem; }
-    .vv-label  { font-size: 11px; color: #999; letter-spacing: 0.06em;
-                 text-transform: uppercase; margin-bottom: 2px; }
-    .vv-value  { font-size: 26px; font-weight: 600; color: #1a1a1a; line-height: 1.2; }
-    .vv-sub    { font-size: 12px; color: #bbb; margin-top: 2px; }
-    .sec-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
-                 text-transform: uppercase; color: #888;
-                 margin: 1.8rem 0 0.8rem; border-bottom: 1px solid #eee; padding-bottom: 6px; }
-    .band-row  { display: flex; align-items: center; gap: 12px;
-                 padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-    .band-bar  { height: 8px; border-radius: 4px; min-width: 4px; }
-    .ev-row    { font-size: 13px; padding: 5px 0; border-bottom: 1px solid #f5f5f5; color: #444; }
-    .badge     { display: inline-block; padding: 1px 8px; border-radius: 3px;
-                 font-size: 11px; font-weight: 500; letter-spacing: 0.02em; }
-</style>
-""", unsafe_allow_html=True)
+# ── Design tokens ──────────────────────────────────────────────────────
+BG_MAIN  = "#0e0e12"
+BG_HERO  = "#0c0c10"
+BG_CARD  = "#0a0a0e"
+BG_NAV   = "#0f0f14"
+BORDER   = "#1a1a22"
+GOLD     = "#c9a252"
+COL_TEMP = "#e8945a"
+COL_HUM  = "#4a8dc8"
+COL_VOC  = "#9b6fd6"
+COL_DH   = "#3dcf8a"
+COL_HM   = "#f0c84a"
+COL_LIVE = "#3d9e6a"
+TXT_PRI  = "#ede8df"
+TXT_SEC  = "#6a6560"
+TXT_DIM  = "#46443f"
+TXT_VDIM = "#36342f"
+
+PRESET_TARGETS = {"DRY": 30, "STD": 50, "MOIST": 70}
+RANGE_HOURS    = {"1H": 1, "6H": 6, "24H": 24, "7D": 168}
+
+EVENT_COLORS = {
+    "preset_change":   GOLD,
+    "shutter_open":    COL_LIVE,
+    "shutter_close":   COL_HUM,
+    "mode_change":     COL_VOC,
+    "solenoid_unlock": COL_TEMP,
+}
+
+LOGO_SVG = """<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+  <path d="M10 1.5L18.5 6.25V13.75L10 18.5L1.5 13.75V6.25Z" stroke="#c9a252" stroke-width="1"/>
+  <path d="M10 4.5L15 7.5V12.5L10 15.5L5 12.5V7.5Z" stroke="#c9a252" stroke-width=".5" opacity=".4"/>
+  <circle cx="10" cy="10" r="1.6" fill="#c9a252" opacity=".7"/>
+</svg>"""
+
+JST = pytz.timezone("Asia/Tokyo")
+REFRESH_SEC = 30
+
+# ── Supabase ───────────────────────────────────────────────────────────
+@st.cache_resource
+def get_supabase():
+    return create_client(st.secrets["supabase_url"], st.secrets["supabase_key"])
 
 
-# ─────────────────────────────
-# データ取得
-# ─────────────────────────────
-@st.cache_data(ttl=60)
-def load_data():
-    sensors = get_sensor_logs()
-    sensors["recorded_at"] = pd.to_datetime(sensors["recorded_at"])
-    ops = get_operation_logs()
-    ops["occurred_at"] = pd.to_datetime(ops["occurred_at"])
-    return sensors, ops
-
-sensors, ops = load_data()
-
-# ─────────────────────────────
-# ヘッダー
-# ─────────────────────────────
-col_h1, col_h2, col_h3 = st.columns([4, 3, 1])
-with col_h1:
-    st.markdown("## VISTAVAULT 保管証明")
-    st.caption("PROTOSCAPE")
-with col_h2:
-    if not sensors.empty:
-        latest = sensors.iloc[-1]
-        st.markdown(
-            f'<div style="padding-top:10px;font-size:12px;color:#aaa;line-height:2">'
-            f'最終同期：{latest["recorded_at"].strftime("%Y-%m-%d %H:%M")}&emsp;'
-            f'WiFi：{latest["rssi"]} dBm</div>',
-            unsafe_allow_html=True,
-        )
-with col_h3:
-    if st.button("更新"):
-        st.cache_data.clear()
-        st.rerun()
-
-if sensors.empty:
-    st.info("センサーログがまだありません。Supabaseの sensor_logs テーブルにデータを追加してください。")
-    st.stop()
-
-st.divider()
-
-# ─────────────────────────────
-# タブ
-# ─────────────────────────────
-tab_env, tab_ops, tab_cert = st.tabs(["環境ログ", "操作ログ", "保管証明書"])
+def fetch_latest(sb) -> dict:
+    res = (sb.table("sensor_logs")
+             .select("temperature,humidity,voc_index,rosahl_dehumid_current_ma,rosahl_humid_current_ma")
+             .order("recorded_at", desc=True).limit(1).execute())
+    return res.data[0] if res.data else {}
 
 
-# ══════════════════════════════
-# TAB 1: 環境ログ
-# ══════════════════════════════
-with tab_env:
+def fetch_sensor_logs(sb, hours: int) -> pd.DataFrame:
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    res = (sb.table("sensor_logs")
+             .select("recorded_at,temperature,humidity,voc_index,rosahl_dehumid_current_ma,rosahl_humid_current_ma")
+             .gte("recorded_at", since).order("recorded_at").execute())
+    if not res.data:
+        return pd.DataFrame()
+    df = pd.DataFrame(res.data)
+    df["recorded_at"] = pd.to_datetime(df["recorded_at"], format="ISO8601", utc=True)
+    return df
 
-    # 期間フィルター
-    col_f1, _ = st.columns([2, 6])
-    with col_f1:
-        period = st.selectbox("表示期間", ["直近24時間", "直近48時間", "全期間"], index=1)
 
-    now = sensors["recorded_at"].max()
-    if period == "直近24時間":
-        df = sensors[sensors["recorded_at"] >= now - pd.Timedelta(hours=24)].copy()
-    elif period == "直近48時間":
-        df = sensors[sensors["recorded_at"] >= now - pd.Timedelta(hours=48)].copy()
-    else:
-        df = sensors.copy()
+def fetch_op_logs(sb, limit: int = 100) -> pd.DataFrame:
+    res = (sb.table("operation_logs")
+             .select("occurred_at,event_type,detail")
+             .order("occurred_at", desc=True).limit(limit).execute())
+    if not res.data:
+        return pd.DataFrame()
+    df = pd.DataFrame(res.data)
+    df["occurred_at"] = pd.to_datetime(df["occurred_at"], format="ISO8601", utc=True)
+    return df
 
-    df["deviation"] = (df["humidity"] - df["humidity_setpoint"]).abs()
-    bands = calc_band_stats(df)
-    total_h = len(df) * 15 / 60
 
-    # ── 乖離バンドサマリー ──
-    st.markdown('<div class="sec-title">設定値からの乖離分布</div>', unsafe_allow_html=True)
+def resolve_preset(op_df: pd.DataFrame) -> tuple[str, int]:
+    if not op_df.empty:
+        pc = op_df[op_df["event_type"] == "preset_change"]
+        if not pc.empty:
+            detail = str(pc.iloc[0].get("detail", "")).upper()
+            for p, t in PRESET_TARGETS.items():
+                if p in detail:
+                    return p, t
+    return "STD", 50
 
-    band_cols = st.columns(len(bands))
-    for col, b in zip(band_cols, bands):
-        with col:
-            bar_w = max(4, int(b["pct"] * 1.4))
-            st.markdown(f"""
-            <div class="vv-label">{b['label']}</div>
-            <div class="vv-value" style="color:{b['color']}">{b['hours']}h</div>
-            <div class="vv-sub">{b['pct']}%　／　全{total_h:.0f}h中</div>
-            <div style="margin-top:8px">
-              <div class="band-bar" style="width:{bar_w}%;background:{b['color']};opacity:0.85"></div>
-            </div>
-            """, unsafe_allow_html=True)
 
-    # ── 湿度グラフ ──
-    st.markdown('<div class="sec-title">温湿度ログ</div>', unsafe_allow_html=True)
+def resolve_shutters(op_df: pd.DataFrame) -> tuple[str, str]:
+    dehum = humid = "—"
+    found_dh = found_hm = False
+    for _, row in op_df.iterrows():
+        if found_dh and found_hm:
+            break
+        ev = row.get("event_type", "")
+        det = str(row.get("detail", "")).lower()
+        state = "OPEN" if ev == "shutter_open" else "CLOSED"
+        if not found_dh and "dehum" in det:
+            dehum = state; found_dh = True
+        if not found_hm and "humid" in det and "dehum" not in det:
+            humid = state; found_hm = True
+    return dehum, humid
 
-    fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.06,
-        row_heights=[0.45, 0.25, 0.30],
-        subplot_titles=("湿度 (%RH)", "乖離量 (%RH)", "温度 / 露点 (°C)"),
-    )
 
-    sp = df["humidity_setpoint"]
+def voc_status(val) -> tuple[str, str]:
+    if val is None: return "—",     TXT_DIM
+    if val < 100:   return "GOOD",  COL_LIVE
+    if val < 200:   return "FAIR",  GOLD
+    if val < 300:   return "POOR",  COL_TEMP
+    return                 "BAD",   "#cf4a4a"
 
-    # 許容帯（±2%）
-    fig.add_trace(go.Scatter(
-        x=pd.concat([df["recorded_at"], df["recorded_at"][::-1]]),
-        y=pd.concat([sp + 2, (sp - 2)[::-1]]),
-        fill="toself", fillcolor="rgba(45,158,114,0.10)",
-        line=dict(width=0), name="±2%帯", showlegend=True,
-    ), row=1, col=1)
+# ── Plotly ─────────────────────────────────────────────────────────────
+_BASE_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor=BG_CARD,
+    margin=dict(l=4, r=4, t=2, b=24),
+    font=dict(family="JetBrains Mono, monospace", size=9, color=TXT_DIM),
+    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=8, color=TXT_DIM),
+               linecolor=BORDER, showline=False),
+    yaxis=dict(showgrid=True, gridcolor="#16161e", zeroline=False,
+               tickfont=dict(size=8, color=TXT_DIM), linecolor=BORDER, showline=False),
+    hovermode="x unified",
+    hoverlabel=dict(bgcolor=BG_CARD, bordercolor=BORDER, font_size=9,
+                    font_family="JetBrains Mono"),
+    showlegend=False,
+)
 
-    # 設定値ライン
-    fig.add_trace(go.Scatter(
-        x=df["recorded_at"], y=sp,
-        mode="lines", name="設定値",
-        line=dict(color="#2d9e72", width=1.2, dash="dot"),
-    ), row=1, col=1)
 
-    # バンド別に色分けプロット
-    band_colors = ["#2d9e72", "#7bc4a0", "#e8a44a", "#d95f49"]
-    for (label, lo, hi), color in zip(DEVIATION_BANDS, band_colors):
-        if hi is None:
-            mask = df["deviation"] >= lo
-        else:
-            mask = (df["deviation"] >= lo) & (df["deviation"] < hi)
-        if mask.any():
+def _hex_fill(hex_color: str) -> str:
+    return hex_color + "18"
+
+
+def make_line_chart(df: pd.DataFrame, col: str, color: str,
+                    unit: str, height: int = 138, target=None) -> go.Figure:
+    fig = go.Figure()
+    if not df.empty and col in df.columns:
+        y = df[col].where(df[col].notna())
+        fig.add_trace(go.Scatter(
+            x=df["recorded_at"], y=y,
+            mode="lines",
+            line=dict(color=color, width=1.5),
+            fill="tozeroy", fillcolor=_hex_fill(color),
+            hovertemplate=f"%{{y:.1f}}{unit}<extra></extra>",
+        ))
+    if target is not None:
+        fig.add_hline(y=target, line_dash="dot", line_color=GOLD, line_width=1,
+                      annotation_text=f"{target}%",
+                      annotation_font_color=GOLD, annotation_font_size=8,
+                      annotation_position="top right")
+    fig.update_layout(**{**_BASE_LAYOUT, "height": height})
+    return fig
+
+
+def make_dual_chart(df: pd.DataFrame, height: int = 138) -> go.Figure:
+    fig = go.Figure()
+    for col, color, name in [
+        ("rosahl_dehumid_current_ma", COL_DH, "DEHUM"),
+        ("rosahl_humid_current_ma",   COL_HM, "HUMID"),
+    ]:
+        if not df.empty and col in df.columns:
             fig.add_trace(go.Scatter(
-                x=df.loc[mask, "recorded_at"],
-                y=df.loc[mask, "humidity"],
-                mode="markers", name=label,
-                marker=dict(color=color, size=3),
-            ), row=1, col=1)
+                x=df["recorded_at"], y=df[col].where(df[col].notna()),
+                mode="lines", line=dict(color=color, width=1.5),
+                name=name, hovertemplate=f"%{{y:.0f}} mA<extra>{name}</extra>",
+            ))
+    fig.update_layout(**{**_BASE_LAYOUT, "height": height})
+    return fig
 
-    # 乖離量バー
-    fig.add_trace(go.Bar(
-        x=df["recorded_at"], y=df["deviation"],
-        marker_color=[
-            "#2d9e72" if d < 2 else "#7bc4a0" if d < 5 else "#e8a44a" if d < 10 else "#d95f49"
-            for d in df["deviation"]
-        ],
-        name="乖離量", showlegend=False,
-    ), row=2, col=1)
-    for (label, lo, hi), color in zip(DEVIATION_BANDS[1:], band_colors[1:]):
-        if lo > 0:
-            fig.add_hline(y=lo, line_dash="dot", line_color=color,
-                          line_width=1, annotation_text=f"{lo}%",
-                          annotation_font_size=9, row=2, col=1)
+# ── CSS ────────────────────────────────────────────────────────────────
+def inject_css():
+    st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
 
-    # 温度 / 露点
-    fig.add_trace(go.Scatter(
-        x=df["recorded_at"], y=df["temperature"],
-        mode="lines", name="温度",
-        line=dict(color="#b07a25", width=1.5),
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=df["recorded_at"], y=df["dew_point"],
-        mode="lines", name="露点",
-        line=dict(color="#bbb", width=1, dash="dash"),
-    ), row=3, col=1)
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
+    background: {BG_MAIN} !important;
+    color: {TXT_PRI};
+}}
+[data-testid="stHeader"], [data-testid="stToolbar"] {{ display:none; }}
+.main .block-container {{ padding:0 !important; max-width:100% !important; }}
+section[data-testid="stSidebar"] {{ display:none; }}
+.modebar {{ display:none !important; }}
+div[data-testid="stPlotlyChart"] {{
+    background:{BG_CARD} !important;
+    border:1px solid {BORDER} !important;
+    border-radius:4px !important;
+    padding:8px 12px 4px !important;
+}}
+.element-container:has(.stPlotlyChart) {{ margin-bottom:6px !important; }}
+/* time-range + log-filter radio — hide Streamlit chrome, show only labels */
+div[data-testid="stRadio"] > label {{ display:none; }}
+div[data-testid="stRadio"] > div {{
+    display:flex !important; flex-direction:row !important;
+    gap:2px; background:transparent;
+}}
+div[data-testid="stRadio"] > div > label {{
+    display:flex; align-items:center;
+    padding:3px 10px;
+    font:400 7px 'JetBrains Mono',monospace; letter-spacing:.1em;
+    color:{TXT_DIM}; border:1px solid #2a2a34; border-radius:2px;
+    cursor:pointer; background:transparent;
+}}
+div[data-testid="stRadio"] > div > label[data-selected="true"],
+div[data-testid="stRadio"] > div > label:has(input:checked) {{
+    font-weight:700; color:{GOLD};
+    background:rgba(201,162,82,.12);
+    border:1px solid rgba(201,162,82,.2);
+}}
+div[data-testid="stRadio"] > div > label > span:first-child {{ display:none; }}
+/* columns gap */
+[data-testid="column"] {{ padding:0 6px !important; }}
+@keyframes livepulse {{
+    0%,100%{{opacity:1}} 50%{{opacity:.2}}
+}}
+.live-dot {{
+    display:inline-block; width:5px; height:5px; border-radius:50%;
+    background:{COL_LIVE}; animation:livepulse 2s ease-in-out infinite;
+    vertical-align:middle; margin-right:4px;
+}}
+</style>""", unsafe_allow_html=True)
 
-    fig.update_layout(
-        height=560, margin=dict(t=40, b=20, l=0, r=0),
-        legend=dict(orientation="h", y=-0.10, font_size=12),
-        hovermode="x unified",
-        plot_bgcolor="#fafafa", paper_bgcolor="#fafafa",
+# ── HTML blocks ────────────────────────────────────────────────────────
+def render_navbar(time_str: str, refresh_in: int):
+    st.markdown(f"""
+<div style="display:flex;align-items:center;padding:0 28px;height:50px;
+            background:linear-gradient(180deg,{BG_NAV} 0%,#0a0a0e 100%);
+            border-bottom:1px solid {BORDER};position:relative;">
+  <div style="position:absolute;top:0;left:0;right:0;height:1px;
+              background:linear-gradient(90deg,transparent 0%,rgba(201,162,82,.5) 25%,rgba(201,162,82,.5) 75%,transparent);"></div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    {LOGO_SVG}
+    <span style="font:600 14px 'Space Grotesk';letter-spacing:.18em;color:{TXT_PRI};">VISTAVAULT</span>
+  </div>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:20px;">
+    <span style="font:300 9px 'Space Grotesk';letter-spacing:.12em;color:#56534f;">MONITORING SYSTEM</span>
+    <div style="width:1px;height:14px;background:#2a2a34;"></div>
+    <div><span class="live-dot"></span><span style="font:600 9px 'JetBrains Mono';letter-spacing:.12em;color:{COL_LIVE};">LIVE</span></div>
+    <span style="font:400 11px 'JetBrains Mono';color:#7a7570;">{time_str} JST</span>
+    <span style="font:300 8px 'JetBrains Mono';color:{TXT_VDIM};">↻ {refresh_in}s</span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+
+def render_hero(latest: dict, target: int):
+    def _val(k, fmt=".1f"):
+        v = latest.get(k)
+        return f"{v:{fmt}}" if v is not None else "—"
+
+    hum = latest.get("humidity")
+    dh  = latest.get("rosahl_dehumid_current_ma")
+    hm  = latest.get("rosahl_humid_current_ma")
+    voc = latest.get("voc_index")
+
+    hum_diff = (f"{'▲' if hum and hum > target else '▼'}{abs(hum - target):.1f}"
+                f" vs {target}%RH target") if hum else "—"
+    hum_dc = GOLD if hum and abs(hum - target) > 2 else COL_LIVE
+
+    voc_lbl, voc_c = voc_status(voc)
+    dh_active = dh and dh > 10
+    hm_active = hm and hm > 10
+
+    def cell(val_s, unit, label, color, extra="", bg="transparent", last=False):
+        border = "" if last else f"border-right:1px solid {BORDER};"
+        return f"""
+        <div style="flex:1;padding:20px 24px 16px;text-align:center;background:{bg};{border}">
+          <div style="font:300 52px 'Cormorant Garamond',serif;line-height:1;color:{color};">{val_s}</div>
+          <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:5px;">
+            <span style="font:300 14px 'Cormorant Garamond',serif;color:{TXT_DIM};">{unit}</span>
+            <span style="width:1px;height:9px;background:#2a2a34;"></span>
+            <span style="font:500 7px 'JetBrains Mono';letter-spacing:.18em;color:{TXT_DIM};">{label}</span>
+          </div>
+          {extra}
+        </div>"""
+
+    hum_extra = f'<div style="font:500 8px \'JetBrains Mono\';color:{hum_dc};margin-top:5px;letter-spacing:.08em;">{hum_diff}</div>'
+    voc_extra = f'<div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:5px;"><span style="width:4px;height:4px;border-radius:50%;background:{voc_c};"></span><span style="font:600 8px \'JetBrains Mono\';color:{voc_c};letter-spacing:.1em;">{voc_lbl}</span></div>'
+    dh_extra  = f'<div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:5px;"><span style="width:4px;height:4px;border-radius:50%;background:{"#3dcf8a" if dh_active else TXT_VDIM};"></span><span style="font:600 8px \'JetBrains Mono\';color:{"#3dcf8a" if dh_active else TXT_DIM};letter-spacing:.1em;">{"ACTIVE" if dh_active else "STANDBY"}</span></div>'
+    hm_extra  = f'<div style="font:600 8px \'JetBrains Mono\';color:{COL_HM if hm_active else TXT_DIM};margin-top:5px;letter-spacing:.08em;">{"ACTIVE" if hm_active else "STANDBY"}</div>'
+
+    st.markdown(f"""
+<div style="display:flex;background:{BG_HERO};border-bottom:1px solid {BORDER};position:relative;">
+  <div style="position:absolute;top:0;left:0;right:0;height:1px;
+              background:linear-gradient(90deg,transparent,rgba(201,162,82,.12),transparent);"></div>
+  {cell(_val('temperature'), '°C', 'TEMPERATURE', TXT_PRI)}
+  {cell(_val('humidity'),    '%RH','HUMIDITY',    COL_HUM, hum_extra, 'rgba(74,141,200,.025)')}
+  {cell(_val('voc_index','d'),'/500','VOC INDEX', TXT_PRI, voc_extra)}
+  {cell(_val('rosahl_dehumid_current_ma','.0f'),'mA','DEHUM', COL_DH, dh_extra, 'rgba(61,207,138,.015)')}
+  {cell(_val('rosahl_humid_current_ma','.0f'), 'mA','HUMID', COL_HM if hm_active else '#56534f', hm_extra, 'transparent', last=True)}
+</div>""", unsafe_allow_html=True)
+
+
+def render_control_bar(preset: str, target: int, dehum: str, humid: str):
+    def p_btn(p):
+        active = p == preset
+        s = (f"color:{GOLD};font-weight:700;background:rgba(201,162,82,.1);"
+             f"border-left:1px solid rgba(201,162,82,.2);border-right:1px solid rgba(201,162,82,.2);") if active else f"color:{TXT_DIM};"
+        return f'<div style="padding:3px 10px;font:500 7px \'JetBrains Mono\';letter-spacing:.1em;{s}">{p}</div>'
+
+    def sh_badge(label, state):
+        c = COL_LIVE if state == "OPEN" else TXT_DIM
+        d = COL_LIVE if state == "OPEN" else TXT_VDIM
+        return (f'<div style="display:flex;align-items:center;gap:5px;">'
+                f'<span style="font:400 7px \'JetBrains Mono\';letter-spacing:.1em;color:{TXT_DIM};">{label}</span>'
+                f'<span style="width:4px;height:4px;border-radius:50%;background:{d};"></span>'
+                f'<span style="font:700 7px \'JetBrains Mono\';color:{c};letter-spacing:.1em;">{state}</span>'
+                f'</div>')
+
+    st.markdown(f"""
+<div style="display:flex;align-items:center;padding:0 28px;height:42px;
+            background:{BG_CARD};border-bottom:1px solid {BORDER};">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="display:flex;border:1px solid #2a2a34;border-radius:3px;overflow:hidden;">
+      {p_btn("DRY")}{p_btn("STD")}{p_btn("MOIST")}
+    </div>
+    <span style="font:700 8px 'JetBrains Mono';color:{GOLD};">{target}%RH</span>
+    <span style="font:400 8px 'Space Grotesk';color:{TXT_DIM};">target</span>
+  </div>
+  <div style="width:1px;height:16px;background:#242430;margin:0 20px;"></div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    {sh_badge("DEHUM", dehum)}
+    {sh_badge("HUMID", humid)}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+
+def render_chart_label(color: str, title: str, unit: str, extra: str = ""):
+    st.markdown(
+        f'<div style="padding:10px 4px 3px;">'
+        f'<span style="font:700 7px \'JetBrains Mono\';letter-spacing:.12em;color:{color};">{title}</span>'
+        f'<span style="font:300 7px \'JetBrains Mono\';color:#2e2c28;margin-left:5px;">{unit}</span>'
+        f'{extra}</div>',
+        unsafe_allow_html=True,
     )
-    fig.update_yaxes(gridcolor="#f0f0f0")
-    fig.update_xaxes(gridcolor="#f0f0f0")
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ── 逸脱イベント詳細 ──
-    st.markdown('<div class="sec-title">逸脱イベント詳細（±2%超）</div>', unsafe_allow_html=True)
-    for (label, lo, hi), color in zip(DEVIATION_BANDS[1:], band_colors[1:]):
-        events = calc_deviation_events(df, lo, hi)
-        if len(events) == 0:
-            continue
-        with st.expander(f"{label}　{len(events)}件"):
-            ev = events.copy()
-            ev["開始"]     = ev["start"].dt.strftime("%m/%d %H:%M")
-            ev["終了"]     = ev["end"].dt.strftime("%m/%d %H:%M")
-            ev["継続"]     = ev["duration_min"].astype(str) + " 分"
-            ev["最大乖離"] = ev["max_dev"].round(2).astype(str) + " %RH"
-            st.dataframe(ev[["開始", "終了", "継続", "最大乖離"]],
-                         use_container_width=True, hide_index=True)
-
-    with st.expander("生データ"):
-        st.dataframe(
-            df[["recorded_at", "humidity", "humidity_setpoint", "deviation",
-                "temperature", "dew_point", "rssi"]]
-            .sort_values("recorded_at", ascending=False)
-            .reset_index(drop=True),
-            use_container_width=True,
-        )
-        st.download_button("CSVダウンロード",
-                           df.to_csv(index=False).encode("utf-8"),
-                           "sensor_logs.csv", "text/csv")
 
 
-# ══════════════════════════════
-# TAB 2: 操作ログ
-# ══════════════════════════════
-with tab_ops:
-    st.markdown('<div class="sec-title">操作ログ</div>', unsafe_allow_html=True)
+def render_op_log(op_df: pd.DataFrame, filt: str):
+    if op_df.empty:
+        rows = '<div style="padding:20px;color:' + TXT_DIM + ';font:400 10px \'Space Grotesk\';">No logs yet.</div>'
+    else:
+        if filt == "PC":
+            df2 = op_df[op_df["event_type"] == "preset_change"]
+        elif filt == "SO":
+            df2 = op_df[op_df["event_type"].isin(["shutter_open", "shutter_close"])]
+        else:
+            df2 = op_df
 
-    EVENT_META = {
-        "lock":           ("施錠",       "#e8f5ef", "#2d9e72"),
-        "unlock":         ("解錠",       "#fdf0ee", "#d95f49"),
-        "door_open":      ("扉 開",      "#eef4fb", "#4a80c4"),
-        "door_close":     ("扉 閉",      "#eef4fb", "#4a80c4"),
-        "led_on":         ("照明 ON",    "#fdf8ee", "#b07a25"),
-        "led_off":        ("照明 OFF",   "#f5f5f5", "#999"),
-        "reboot":         ("再起動",     "#f5f5f5", "#999"),
-        "wifi_connect":   ("WiFi 接続",  "#f5f5f5", "#999"),
-        "setpoint_change":("設定値変更", "#f3eefb", "#7a4ac4"),
-    }
+        items = df2.head(25)
+        rows = ""
+        for i, (_, row) in enumerate(items.iterrows()):
+            ev  = row.get("event_type", "")
+            det = row.get("detail", "") or ""
+            ts  = row.get("occurred_at")
+            ts_s = ts.astimezone(JST).strftime("%H:%M:%S") if pd.notna(ts) else "—"
+            c   = EVENT_COLORS.get(ev, TXT_DIM)
+            is_last = i == len(items) - 1
+            connector = "" if is_last else (
+                f'<div style="width:1px;flex:1;background:{BORDER};margin-top:3px;margin-bottom:-1px;"></div>')
+            rows += f"""
+            <div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid #141418;">
+              <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;padding-top:2px;">
+                <div style="width:6px;height:6px;border-radius:50%;background:{c};"></div>
+                {connector}
+              </div>
+              <div style="flex:1;min-width:0;padding-bottom:4px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <span style="font:600 7px 'JetBrains Mono';letter-spacing:.1em;color:{c};">{ev.upper()}</span>
+                  <span style="font:300 9px 'JetBrains Mono';color:{TXT_DIM};">{ts_s}</span>
+                </div>
+                <p style="font:400 10px 'Space Grotesk';color:{TXT_SEC};margin:0;line-height:1.4;">{det}</p>
+              </div>
+            </div>"""
 
-    col_t, col_e, col_b, col_sp = st.columns([3, 2, 2, 3])
-    for c, h in zip([col_t, col_e, col_b, col_sp],
-                    ["日時", "イベント", "操作元", "設定値"]):
-        with c:
-            st.markdown(f'<div style="font-size:11px;color:#bbb;font-weight:600;'
-                        f'letter-spacing:.06em;text-transform:uppercase;'
-                        f'padding-bottom:6px;border-bottom:1px solid #eee">{h}</div>',
-                        unsafe_allow_html=True)
-
-    for _, row in ops.sort_values("occurred_at", ascending=False).iterrows():
-        label, bg, color = EVENT_META.get(row["event_type"], (row["event_type"], "#f5f5f5", "#999"))
-        col_t, col_e, col_b, col_sp = st.columns([3, 2, 2, 3])
-        with col_t:
-            st.markdown(f'<div class="ev-row">{row["occurred_at"].strftime("%Y-%m-%d %H:%M:%S")}</div>',
-                        unsafe_allow_html=True)
-        with col_e:
-            st.markdown(
-                f'<div class="ev-row"><span class="badge" '
-                f'style="background:{bg};color:{color}">{label}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with col_b:
-            st.markdown(f'<div class="ev-row" style="color:#bbb;font-size:12px">'
-                        f'{row["triggered_by"]}</div>', unsafe_allow_html=True)
-        with col_sp:
-            sp_val = row.get("humidity_setpoint")
-            text = f'{sp_val}%RH' if pd.notna(sp_val) else ""
-            st.markdown(f'<div class="ev-row" style="font-size:12px;color:#666">'
-                        f'{text}</div>', unsafe_allow_html=True)
-
-
-# ══════════════════════════════
-# TAB 3: 保管証明書
-# ══════════════════════════════
-with tab_cert:
-    st.markdown('<div class="sec-title">保管証明書プレビュー</div>', unsafe_allow_html=True)
-    st.info("Phase 1：レイアウト確認用。PDF出力は Phase 3 で実装予定。")
-
-    bands_all = calc_band_stats(sensors)
-    total_h_all = len(sensors) * 15 / 60
-    period_start = sensors["recorded_at"].min().strftime("%Y年%m月%d日 %H:%M")
-    period_end   = sensors["recorded_at"].max().strftime("%Y年%m月%d日 %H:%M")
-    setpoint_changes = ops[ops["event_type"] == "setpoint_change"]
-
+    count = len(op_df)
     st.markdown(f"""
----
+<div style="background:{BG_MAIN};border-left:1px solid {BORDER};height:100%;">
+  <div style="padding:13px 18px;border-bottom:1px solid {BORDER};
+              display:flex;align-items:center;gap:10px;">
+    <span style="font:700 8px 'JetBrains Mono';letter-spacing:.14em;color:{TXT_PRI};">OPERATION LOG</span>
+    <span style="font:700 8px 'JetBrains Mono';background:#1e1e24;color:#7a7570;
+                 padding:1px 7px;border-radius:10px;">{count}</span>
+  </div>
+  <div style="padding:6px 18px 14px;">{rows}</div>
+</div>""", unsafe_allow_html=True)
 
-### VISTAVAULT 保管証明書
+# ── Main ───────────────────────────────────────────────────────────────
+def main():
+    inject_css()
 
-**発行日時：** {datetime.now().strftime("%Y年%m月%d日 %H:%M")}  
-**デバイスID：** `{sensors['device_id'].iloc[0]}`  
-**記録期間：** {period_start} ～ {period_end}  
-**総記録時間：** {total_h_all:.0f} 時間  
+    # Session state
+    if "last_refresh" not in st.session_state:
+        st.session_state.last_refresh = time.time()
 
----
+    # ── Navbar ─────────────────────────────────────────────────────────
+    now_jst    = datetime.now(JST)
+    refresh_in = max(0, REFRESH_SEC - int(time.time() - st.session_state.last_refresh))
+    render_navbar(now_jst.strftime("%H:%M:%S"), refresh_in)
 
-#### 湿度設定値の履歴
-""")
-
-    for _, row in setpoint_changes.sort_values("occurred_at").iterrows():
-        st.markdown(
-            f"- {row['occurred_at'].strftime('%Y/%m/%d %H:%M')}　"
-            f"設定値 → **{row['humidity_setpoint']}%RH**（{row['triggered_by']}）"
+    # ── Control strip: time-range + log-filter (Streamlit widgets) ─────
+    ctrl_l, ctrl_r = st.columns([1, 1])
+    with ctrl_l:
+        time_range = st.radio(
+            "time", options=list(RANGE_HOURS.keys()),
+            horizontal=True, index=0, key="time_range", label_visibility="collapsed"
+        )
+    with ctrl_r:
+        log_filter = st.radio(
+            "log", options=["ALL", "PC", "SO"],
+            horizontal=True, index=0, key="log_filter", label_visibility="collapsed"
         )
 
-    st.markdown("#### 設定値からの乖離分布")
+    # ── Data ───────────────────────────────────────────────────────────
+    sb      = get_supabase()
+    latest  = fetch_latest(sb)
+    df      = fetch_sensor_logs(sb, RANGE_HOURS[time_range])
+    op_df   = fetch_op_logs(sb, limit=100)
+    preset, target   = resolve_preset(op_df)
+    dehum_s, humid_s = resolve_shutters(op_df)
 
-    band_table = "| 乖離幅 | 時間 | 割合 |\n|--------|------|------|\n"
-    for b in bands_all:
-        band_table += f"| {b['label']} | {b['hours']} 時間 | {b['pct']}% |\n"
-    st.markdown(band_table)
+    # ── Hero + control bar ─────────────────────────────────────────────
+    render_hero(latest, target)
+    render_control_bar(preset, target, dehum_s, humid_s)
 
-    st.markdown(f"""
-#### 温湿度記録
+    # ── Main area: charts | op-log ─────────────────────────────────────
+    col_charts, col_log = st.columns([1, 0.38], gap="small")
 
-| 項目 | 最小 | 平均 | 最大 |
-|------|------|------|------|
-| 湿度 (%RH) | {sensors['humidity'].min():.1f} | {sensors['humidity'].mean():.1f} | {sensors['humidity'].max():.1f} |
-| 温度 (°C)  | {sensors['temperature'].min():.1f} | {sensors['temperature'].mean():.1f} | {sensors['temperature'].max():.1f} |
-| 露点 (°C)  | {sensors['dew_point'].min():.1f} | {sensors['dew_point'].mean():.1f} | {sensors['dew_point'].max():.1f} |
+    with col_charts:
+        target_line = target if not df.empty else None
 
-#### 操作記録
+        render_chart_label(
+            COL_HUM, "HUMIDITY", "%RH",
+            f'&nbsp;&nbsp;<span style="font:400 7px \'JetBrains Mono\';color:{GOLD};">— TARGET {target}%RH</span>',
+        )
+        st.plotly_chart(
+            make_line_chart(df, "humidity", COL_HUM, "%RH", target=target_line),
+            use_container_width=True, config={"displayModeBar": False},
+        )
 
-- 開錠回数：**{len(ops[ops['event_type'] == 'unlock'])} 回**
-- 扉開閉回数：**{len(ops[ops['event_type'] == 'door_open'])} 回**
-- 設定値変更：**{len(setpoint_changes)} 回**
+        render_chart_label(COL_TEMP, "TEMPERATURE", "°C")
+        st.plotly_chart(
+            make_line_chart(df, "temperature", COL_TEMP, "°C"),
+            use_container_width=True, config={"displayModeBar": False},
+        )
 
----
+        render_chart_label(COL_VOC, "VOC INDEX", "0–500")
+        st.plotly_chart(
+            make_line_chart(df, "voc_index", COL_VOC, ""),
+            use_container_width=True, config={"displayModeBar": False},
+        )
 
-本証明書は VISTAVAULT（PROTOSCAPE）が自動記録した環境データに基づきます。  
-改ざん防止機構（ハッシュチェーン）は製品版にて実装予定。
-""")
+        render_chart_label(
+            TXT_PRI, "ROSAHL CURRENT", "mA",
+            f'&nbsp;&nbsp;<span style="color:{COL_DH};font:400 7px \'JetBrains Mono\';">— DEHUM</span>'
+            f'&nbsp;<span style="color:{COL_HM};font:400 7px \'JetBrains Mono\';">— HUMID</span>',
+        )
+        st.plotly_chart(
+            make_dual_chart(df),
+            use_container_width=True, config={"displayModeBar": False},
+        )
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.button("PDF出力（未実装）", disabled=True)
-    with col_b:
-        st.button("共有リンク生成（未実装）", disabled=True)
+    with col_log:
+        render_op_log(op_df, log_filter)
+
+    # ── Auto-refresh ───────────────────────────────────────────────────
+    if time.time() - st.session_state.last_refresh >= REFRESH_SEC:
+        st.session_state.last_refresh = time.time()
+        st.rerun()
+    time.sleep(1)
+    st.rerun()
+
+
+if __name__ == "__main__":
+    main()
