@@ -120,6 +120,12 @@ BASE_LAYOUT = dict(
     showlegend=False,
 )
 
+def _rgba(hex_color, alpha):
+    """#rrggbb -> rgba(r,g,b,alpha) — 8桁HEXを避けてPlotly互換にする"""
+    hc = hex_color.lstrip("#")
+    r, g, b = int(hc[0:2], 16), int(hc[2:4], 16), int(hc[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 def _empty_annotation(fig):
     fig.add_annotation(
         text="この期間にデータがありません",
@@ -134,7 +140,7 @@ def make_chart(df, col, color, unit, h=138, target=None):
         fig.add_trace(go.Scatter(
             x=df["recorded_at"], y=df[col].where(df[col].notna()),
             mode="lines", line=dict(color=color, width=1.5),
-            fill="tozeroy", fillcolor=color + "18",
+            fill="tozeroy", fillcolor=_rgba(color, 0.09),
             hovertemplate=f"%{{y:.1f}}{unit}<extra></extra>",
         ))
     else:
