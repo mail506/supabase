@@ -428,21 +428,21 @@ def main():
         render_clbl(COL_HUM, "HUMIDITY", "%RH",
                     f'&nbsp;&nbsp;<span style="font-family:monospace;font-size:7px;color:{GOLD};">— TARGET {target}%RH</span>')
         st.plotly_chart(make_chart(df, "humidity", COL_HUM, "%RH", target=target),
-                        use_container_width=True, config={"displayModeBar": False})
+                        use_container_width=True, config={"displayModeBar": False}, key="chart_hum")
 
         render_clbl(COL_TEMP, "TEMPERATURE", "°C")
         st.plotly_chart(make_chart(df, "temperature", COL_TEMP, "°C"),
-                        use_container_width=True, config={"displayModeBar": False})
+                        use_container_width=True, config={"displayModeBar": False}, key="chart_tmp")
 
         render_clbl(COL_VOC, "VOC INDEX", "0–500")
         st.plotly_chart(make_chart(df, "voc_index", COL_VOC, ""),
-                        use_container_width=True, config={"displayModeBar": False})
+                        use_container_width=True, config={"displayModeBar": False}, key="chart_voc")
 
         render_clbl(TXT_PRI, "ROSAHL CURRENT", "mA",
                     f'&nbsp;&nbsp;<span style="font-family:monospace;font-size:7px;color:{COL_DH};">— DEHUM</span>'
                     f'&nbsp;<span style="font-family:monospace;font-size:7px;color:{COL_HM};">— HUMID</span>')
         st.plotly_chart(make_dual(df), use_container_width=True,
-                        config={"displayModeBar": False})
+                        config={"displayModeBar": False}, key="chart_cur")
 
     with col_l:
         render_oplog(op_df, log_filter)
