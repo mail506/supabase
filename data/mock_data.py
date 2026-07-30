@@ -40,7 +40,7 @@ def get_sensor_logs() -> pd.DataFrame:
             "dew_point", "humidity_setpoint", "rssi", "uptime_sec",
         ])
     df = pd.DataFrame(rows)
-    df["recorded_at"] = pd.to_datetime(df["recorded_at"])
+    df["recorded_at"] = pd.to_datetime(df["recorded_at"], format="ISO8601", utc=True)
     return df
 
 
@@ -59,7 +59,7 @@ def get_operation_logs() -> pd.DataFrame:
             "triggered_by", "humidity_setpoint", "detail",
         ])
     df = pd.DataFrame(rows)
-    df["occurred_at"] = pd.to_datetime(df["occurred_at"])
+    df["occurred_at"] = pd.to_datetime(df["occurred_at"], format="ISO8601", utc=True)
     return df
 
 
