@@ -133,7 +133,7 @@ def _empty_annotation(fig):
         showarrow=False, font=dict(size=10, color="#56534f"),
     )
 
-def make_chart(df, col, color, unit, h=138, target=None):
+def make_chart(df, col, color, unit, h=166, target=None):
     fig = go.Figure()
     has_data = (not df.empty) and (col in df.columns) and bool(df[col].notna().any())
     if has_data:
@@ -152,7 +152,7 @@ def make_chart(df, col, color, unit, h=138, target=None):
     fig.update_layout(**{**BASE_LAYOUT, "height": h})
     return fig
 
-def make_dual(df, h=138):
+def make_dual(df, h=166):
     fig = go.Figure()
     any_data = False
     for col, c, nm in [
@@ -184,7 +184,14 @@ section[data-testid="stSidebar"]{{display:none;}}
 div[data-testid="stPlotlyChart"]{{
   background:{BG_CARD}!important;border:1px solid {BORDER}!important;
   border-radius:4px!important;padding:8px 12px 4px!important;
+  overflow:hidden!important;
 }}
+div[data-testid="stPlotlyChart"]>div,
+div[data-testid="stPlotlyChart"] .js-plotly-plot,
+div[data-testid="stPlotlyChart"] .plot-container{{
+  overflow:hidden!important;
+}}
+.stPlotlyChart{{overflow:hidden!important;}}
 .element-container:has(.stPlotlyChart){{margin-bottom:6px!important;}}
 div[data-testid="stRadio"]>label{{display:none;}}
 div[data-testid="stRadio"]>div{{display:flex!important;flex-direction:row!important;gap:2px;background:transparent;}}
