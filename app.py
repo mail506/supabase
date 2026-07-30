@@ -120,15 +120,25 @@ BASE_LAYOUT = dict(
     showlegend=False,
 )
 
+def _empty_annotation(fig):
+    fig.add_annotation(
+        text="この期間にデータがありません",
+        xref="paper", yref="paper", x=0.5, y=0.5,
+        showarrow=False, font=dict(size=10, color="#56534f"),
+    )
+
 def make_chart(df, col, color, unit, h=138, target=None):
     fig = go.Figure()
-    if not df.empty and col in df.columns:
+    has_data = (not df.empty) and (col in df.columns) and bool(df[col].notna().any())
+    if has_data:
         fig.add_trace(go.Scatter(
             x=df["recorded_at"], y=df[col].where(df[col].notna()),
             mode="lines", line=dict(color=color, width=1.5),
             fill="tozeroy", fillcolor=color + "18",
             hovertemplate=f"%{{y:.1f}}{unit}<extra></extra>",
         ))
+    else:
+        _empty_annotation(fig)
     if target is not None:
         fig.add_hline(y=target, line_dash="dot", line_color=GOLD, line_width=1,
                       annotation_text=f"{target}%", annotation_font_color=GOLD,
@@ -138,16 +148,20 @@ def make_chart(df, col, color, unit, h=138, target=None):
 
 def make_dual(df, h=138):
     fig = go.Figure()
+    any_data = False
     for col, c, nm in [
         ("rosahl_dehumid_current_ma", COL_DH, "DEHUM"),
         ("rosahl_humid_current_ma",   COL_HM, "HUMID"),
     ]:
-        if not df.empty and col in df.columns:
+        if not df.empty and col in df.columns and df[col].notna().any():
+            any_data = True
             fig.add_trace(go.Scatter(
                 x=df["recorded_at"], y=df[col].where(df[col].notna()),
                 mode="lines", line=dict(color=c, width=1.5), name=nm,
                 hovertemplate=f"%{{y:.0f}} mA<extra>{nm}</extra>",
             ))
+    if not any_data:
+        _empty_annotation(fig)
     fig.update_layout(**{**BASE_LAYOUT, "height": h})
     return fig
 
@@ -189,7 +203,14 @@ def h(html: str):
     st.markdown(html, unsafe_allow_html=True)
 
 # ── Render blocks ──────────────────────────────────────────────────────
-def render_navbar(ts: str, ri: int):
+def render_navbar(ts: str, ri: int, data_age: str = ""):
+    if data_age:
+        live_html = (f'<span style="font-family:monospace;font-size:9px;letter-spacing:.1em;color:#c9a252;">'
+                     f'LAST DATA {data_age}</span>')
+    else:
+        live_html = ('<div><span class="live-dot"></span>'
+                     '<span style="font-weight:600;font-size:9px;letter-spacing:.12em;'
+                     'color:#3d9e6a;font-family:monospace;">LIVE</span></div>')
     h(f"""
 <div style="display:flex;align-items:center;padding:0 28px;height:50px;
   background:linear-gradient(180deg,#0f0f14 0%,#0a0a0e 100%);
@@ -203,8 +224,7 @@ def render_navbar(ts: str, ri: int):
   <div style="margin-left:auto;display:flex;align-items:center;gap:20px;">
     <span style="font-size:9px;letter-spacing:.12em;color:#56534f;">MONITORING SYSTEM</span>
     <div style="width:1px;height:14px;background:#2a2a34;"></div>
-    <div><span class="live-dot"></span>
-      <span style="font-weight:600;font-size:9px;letter-spacing:.12em;color:{COL_LIVE};font-family:monospace;">LIVE</span></div>
+    {live_html}
     <span style="font-family:monospace;font-size:11px;color:#7a7570;">{ts} JST</span>
     <span style="font-family:monospace;font-size:8px;color:{TXT_VDIM};">↻ {ri}s</span>
   </div>
@@ -348,31 +368,48 @@ def main():
     now_jst    = datetime.now(JST)
     refresh_in = max(0, REFRESH_SEC - int(time.time() - st.session_state.last_refresh))
 
-    # Navbar
-    render_navbar(now_jst.strftime("%H:%M:%S"), refresh_in)
+    # Data fetch
+    try:
+        sb     = get_sb()
+        latest = fetch_latest(sb)
+        op_df  = fetch_op_logs(sb)
+        # 最新データの鮮度を算出
+        latest_ts_df = fetch_sensor_logs(sb, 168)  # 直近7日から最新時刻を取る
+        data_age = ""
+        if not latest_ts_df.empty:
+            last_dt = latest_ts_df["recorded_at"].max()
+            delta_min = (datetime.now(pytz.utc) - last_dt).total_seconds() / 60
+            if delta_min < 2:
+                data_age = ""  # LIVE表示
+            elif delta_min < 60:
+                data_age = f"{int(delta_min)}分前"
+            elif delta_min < 1440:
+                data_age = f"{int(delta_min//60)}時間前"
+            else:
+                data_age = f"{int(delta_min//1440)}日前"
+        preset, target   = resolve_preset(op_df)
+        dehum_s, humid_s = resolve_shutters(op_df)
+    except Exception as e:
+        render_navbar(now_jst.strftime("%H:%M:%S"), refresh_in)
+        st.error(f"Supabase接続エラー: {e}")
+        return
 
-    # 時間範囲 + ログフィルター（Streamlit radioをCSS偽装）
+    # Navbar（データ鮮度を反映）
+    render_navbar(now_jst.strftime("%H:%M:%S"), refresh_in, data_age)
+
+    # 時間範囲 + ログフィルター
     c1, c2, _ = st.columns([0.3, 0.3, 0.4])
     with c1:
         time_range = st.radio("t", list(RANGE_HOURS.keys()),
-                              horizontal=True, index=0, key="tr",
+                              horizontal=True, index=2, key="tr",
                               label_visibility="collapsed")
     with c2:
         log_filter = st.radio("l", ["ALL", "PC", "SO"],
                               horizontal=True, index=0, key="lf",
                               label_visibility="collapsed")
 
-    # Data fetch
-    try:
-        sb     = get_sb()
-        latest = fetch_latest(sb)
-        df     = fetch_sensor_logs(sb, RANGE_HOURS[time_range])
-        op_df  = fetch_op_logs(sb)
-        preset, target   = resolve_preset(op_df)
-        dehum_s, humid_s = resolve_shutters(op_df)
-    except Exception as e:
-        st.error(f"Supabase接続エラー: {e}")
-        return
+    # 選択された時間範囲でセンサーログ取得
+    df = fetch_sensor_logs(sb, RANGE_HOURS[time_range])
 
     # Hero + control bar
     render_hero(latest, target)
